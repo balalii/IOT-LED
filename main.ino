@@ -1,123 +1,61 @@
 #include <Preferences.h>
 
-const int leds[] = {2, 4, 22, 5, 18, 19}; // 6 LED (GPIO22 = biru)
-const int NUM_LEDS = sizeof(leds) / sizeof(leds[0]);
-const int buttonPin = 23; // tombol wired ke GND (INPUT_PULLUP)
+int button = 15;                         // pin tombol (sesuai JSON)
+int leds[] = {2, 4, 5, 17, 18, 19};      // pin LED (termasuk biru di 17)
+int totalLeds = 6;
+
+bool running = false;                    // status LED berjalan
+int currentLed = 0;
+int lastButtonState = LOW;               // aktif HIGH (default LOW)
+unsigned long lastDebounce = 0;
+const unsigned long debounceDelay = 200;
 
 Preferences prefs;
-const char* PREF_NAMESPACE = "led_toggle";
-const char* PREF_KEY = "running_state";
-
-bool running = false;
-
-// Debounce variables
-int lastReading = HIGH;           // last raw reading from pin
-int stableState = HIGH;           // debounced stable state
-unsigned long lastDebounceTime = 0;
-const unsigned long debounceDelay = 50; // ms
-
-// LED animation
-int ledIndex = 0;
-int arah = 1; // 1 = ke kanan, -1 = ke kiri
-unsigned long previousMillis = 0;
-const unsigned long interval = 150; // ms
 
 void setup() {
   Serial.begin(115200);
-  delay(300);
-  Serial.println("\n=== RUNNING LED TOGGLE (persistent) ===");
-
-  // Setup LED pins
-  for (int i = 0; i < NUM_LEDS; i++) {
+  pinMode(button, INPUT);                // tombol aktif HIGH, tidak gunakan PULLUP
+  for (int i = 0; i < totalLeds; i++) {
     pinMode(leds[i], OUTPUT);
     digitalWrite(leds[i], LOW);
   }
 
-  // Setup button with internal pull-up
-  pinMode(buttonPin, INPUT_PULLUP);
-
-  // Init Preferences and read saved state
-  prefs.begin(PREF_NAMESPACE, false);
-  running = prefs.getBool(PREF_KEY, false);
-  Serial.print("Loaded saved state -> running = ");
-  Serial.println(running ? "TRUE" : "FALSE");
-
-  if (!running) {
-    matikanSemuaLED();
-  }
-
-  Serial.println("Tekan tombol untuk toggle ON/OFF (disimpan ke NVS).");
+  prefs.begin("led-state", false);
+  running = prefs.getBool("running", false);
+  Serial.println(running ? "MODE: ON (Saved)" : "MODE: OFF (Saved)");
 }
 
 void loop() {
-  // --- Read button (raw) ---
-  int reading = digitalRead(buttonPin);
+  int reading = digitalRead(button);
 
-  // If reading changed, reset debounce timer
-  if (reading != lastReading) {
-    lastDebounceTime = millis();
-  }
+  // deteksi tepi naik (LOW -> HIGH)
+  if (reading == HIGH && lastButtonState == LOW && (millis() - lastDebounce) > debounceDelay) {
+    running = !running;
+    prefs.putBool("running", running);
+    Serial.println(running ? "MODE: ON" : "MODE: OFF");
+    lastDebounce = millis();
 
-  // If enough time has passed, consider the reading stable
-  if ((millis() - lastDebounceTime) > debounceDelay) {
-    if (reading != stableState) {
-      stableState = reading;
-      // Only toggle when stableState transitions to PRESSED (LOW)
-      if (stableState == LOW) {
-        // Toggle running
-        running = !running;
-        // Save to NVS
-        prefs.putBool(PREF_KEY, running);
-        if (running) {
-          Serial.println(">>> LED DINYALAKAN (state disimpan)");
-        } else {
-          Serial.println(">>> LED DIMATIKAN (state disimpan)");
-          matikanSemuaLED();
-        }
+    if (!running) {
+      // matikan semua LED jika OFF
+      for (int i = 0; i < totalLeds; i++) {
+        digitalWrite(leds[i], LOW);
       }
     }
   }
 
-  lastReading = reading;
+  lastButtonState = reading;
 
-  // Run animation only when running = true
   if (running) {
-    unsigned long currentMillis = millis();
-    if (currentMillis - previousMillis >= interval) {
-      previousMillis = currentMillis;
-      updateRunningLED();
+    static unsigned long lastLedTime = 0;
+    if (millis() - lastLedTime >= 200) {
+      lastLedTime = millis();
+      // matikan semua LED
+      for (int i = 0; i < totalLeds; i++) {
+        digitalWrite(leds[i], LOW);
+      }
+      // nyalakan LED berikutnya
+      digitalWrite(leds[currentLed], HIGH);
+      currentLed = (currentLed + 1) % totalLeds;
     }
-  }
-
-  // (loop ringan, non-blocking)
-}
-
-// Update LED with safe index management
-void updateRunningLED() {
-  // Matikan semua LED terlebih dahulu
-  matikanSemuaLED();
-
-  // Nyalakan LED sekarang
-  digitalWrite(leds[ledIndex], HIGH);
-
-  // Hitung index berikutnya tanpa melewati batas
-  int nextIndex = ledIndex + arah;
-
-  if (nextIndex >= NUM_LEDS) {
-    // sudah melewati ujung kanan -> balik arah
-    arah = -1;
-    nextIndex = NUM_LEDS - 2; // agar lompat ke elemen satu di kiri
-  } else if (nextIndex < 0) {
-    // sudah melewati ujung kiri -> balik arah
-    arah = 1;
-    nextIndex = 1; // agar lompat ke elemen satu di kanan
-  }
-
-  ledIndex = nextIndex;
-}
-
-void matikanSemuaLED() {
-  for (int i = 0; i < NUM_LEDS; i++) {
-    digitalWrite(leds[i], LOW);
   }
 }
